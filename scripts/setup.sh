@@ -27,13 +27,6 @@ arch=$(dpkg --print-architecture)
 
 DOCKERFILE=docker-compose.yml
 
-if [ $arch == "arm64" ];
-then
-	DOCKERFILE=docker-compose.arm.yml
-	printf "\nBuilding for arm64...\n" "info"
-fi
-
-
 ### Check if required ports are in use by anything other than docker
 netstat_check () {
 	
@@ -81,8 +74,7 @@ checksum () {
 	printf "\nChecking for TAK server release files (..RELEASE.zip) in the directory....\n"
 	sleep 1
 
-	if [ "$(ls -hl *-RELEASE-*.zip 2>/dev/null)" ];
-	then
+	if [ "$(ls -hl *-RELEASE-*.zip 2>/dev/null)" ]; then
 		printf $warning "SECURITY WARNING: Make sure the checksums match! You should only download your release from a trusted source eg. tak.gov:\n"
 		for file in *.zip;
 		do
@@ -111,8 +103,8 @@ checksum () {
 		fi
 		printf "MD5 Verification: "
 		md5sum --ignore-missing -c tak-md5checksum.txt
-		if [ $? -ne 0 ];
-		then
+		if [ $? -ne 0 ]; 
+    then
 			printf $danger "SECURITY WARNING: The checksum is not correct, so the file is different. Do you really want to continue with this setup? (y/n): "
 			read check
 			if [ "$check" == "n" ];
@@ -156,7 +148,7 @@ if [ -d "/tmp/takserver" ]
 then
 	rm -rf /tmp/takserver
 fi
-
+4
 # ifconfig?
 export PATH=$PATH:/sbin
 if ! command -v ifconfig
@@ -230,24 +222,49 @@ password=$pwd"Meh1!"
 pgpwd="$(cat /dev/urandom | tr -dc '[:alpha:][:digit:]' | fold -w ${1:-11} | head -n 1)"
 pgpassword=$pgpwd"Meh1!"
 
-# get IP
-NIC=$(route | grep default | awk '{print $8}' | head -n 1)
-IP=$(ip addr show $NIC | grep -m 1 "inet " | awk '{print $2}' | cut -d "/" -f1)
+# Set ip
+read -p "Enter IP adress your TAK Server: " IP
+if [ -z "$IP" ]; then
+  NIC=$(route | grep default | awk '{print $8}' | head -n 1)
+  IP=$(ip addr show $NIC | grep -m 1 "inet " | awk '{print $2}' | cut -d "/" -f1)
+	country="$IP"
+fi
 
-printf $info "\nProceeding with IP address: $IP\n"
 sed -i "s/password=\".*\"/password=\"${pgpassword}\"/" tak/CoreConfig.xml
+
+# Set Root, Intermediate and Server Certificate Authority
+printf $warning "PKI setup. Hit enter (x2) to accept the defaults:\n"
+read -p "Enter name (min 5 characters) of the Root Certificate Authority: " ca
+read -p "Enter name of the Intermediate Certificate Authority: " intermeditate
+
+if [ -z "$ca" ] || [ ${#ca} -le 4 ]; 
+then
+	ca="TAK-ROOT-CA-01"
+else ca=$(echo "${ca^^}" | tr -d ' \t')
+fi
+
+if [ -z "$intermeditate" ]; 
+then
+	intermeditate="TAK-ID-CA-01"
+else intermeditate=$(echo "${intermeditate^^}" | tr -d ' \t')
+fi
+
+
 # Replaces HOSTIP for rate limiter and Fed server. Database URL is a docker alias of tak-database
 sed -i "s/HOSTIP/$IP/g" tak/CoreConfig.xml
 
-# Replaces takserver.jks with $IP.jks
+# Modify the default takserver.jks with $IP.jks
 sed -i "s/takserver.jks/$IP.jks/g" tak/CoreConfig.xml
+
+# Modify the default truststore-root with our new truststore-<CACommonName>
+sed -i "s/truststore-root.jks/truststore-$intermeditate.jks/g" tak/CoreConfig.xml
 
 # Better memory allocation:
 # By default TAK server allocates memory based upon the *total* on a machine. 
 # In the real world, people not on a gov budget use a server for more than one thing.
 # Instead we allocate a fixed amount of memory
 read -p "Enter the amount of memory to allocate, in kB. Default 4000000 (4GB): " mem
-if [ -z "$mem" ];
+if [ -z "$mem" ]; 
 then
 	mem="4000000"
 fi
@@ -257,34 +274,55 @@ sed -i "s%\`awk '/MemTotal/ {print \$2}' /proc/meminfo\`%$mem%g" tak/setenv.sh
 ## Set variables for generating CA and client certs
 printf $warning "SSL setup. Hit enter (x4) to accept the defaults:\n"
 read -p "Country (for cert generation). Default [US] : " country
-read -p "State (for cert generation). Default [state] : " state
-read -p "City (for cert generation). Default [city]: " city
-read -p "Organizational Unit (for cert generation). Default [org]: " orgunit
+read -p "State (for cert generation). Default [STATE] : " state
+read -p "City (for cert generation). Default [CITY]: " city
+read -p "Organization (for cert generation). Default [TAK]: " org
+read -p "Organizational Unit (for cert generation). Default [TAK]: " orgunit
 
-if [ -z "$country" ];
+if [ -z "$country" ]; 
 then
 	country="US"
 fi
 
-if [ -z "$state" ];
+if [ -z "$state" ]; 
 then
-	state="state"
+	state="STATE"
+else
+  state=$(echo "${state^^}" | tr -d ' \t')
 fi
 
-if [ -z "$city" ];
+if [ -z "$city" ]; 
 then
-	city="city"
+	city="CITY"
+else
+  city=$(echo "${city^^}" | tr -d ' \t') 
 fi
 
-if [ -z "$orgunit" ];
+if [ -z "$org" ]; 
 then
-	orgunit="org"
+  org="TAK"
+else
+  org=$(echo "${org^^}" | tr -d ' \t')
 fi
+
+if [ -z "$orgunit" ]; 
+then
+	orgunit="TAK"
+else
+  orgunit=$(echo "${orgunit^^}" | tr -d ' \t')
+fi
+
+# Modify the default Organiztion in certificateSigning CA module
+sed -i "s|<nameEntry name=\"O\" value=\"TAK\"/>|<nameEntry name=\"O\" value=\"$org\"/>|" tak/CoreConfig.xml
+
+# Modify the default Organizational Unit in certificateSigning CA module
+sed -i "s|<nameEntry name=\"OU\" value=\"TAK\"/>|<nameEntry name=\"OU\" value=\"$orgunit\"/>|" tak/CoreConfig.xml
 
 # Update local env
 export COUNTRY=$country
 export STATE=$state
 export CITY=$city
+export ORGANIZATION=$org
 export ORGANIZATIONAL_UNIT=$orgunit
 
 
@@ -293,6 +331,7 @@ cat << EOF > .env
 COUNTRY=$country
 STATE=$state
 CITY=$city
+ORGANIZATION=$org
 ORGANIZATIONAL_UNIT=$orgunit
 EOF
 
@@ -308,40 +347,33 @@ while :
 do
 	sleep 10 # let the PG stderr messages conclude...
 	printf $warning "------------CERTIFICATE GENERATION--------------\n"
-	$DOCKER_COMPOSE exec tak bash -c "cd /opt/tak/certs && ./makeRootCa.sh --ca-name CRFtakserver"
+	$DOCKER_COMPOSE exec -e CA="$ca" tak bash -c 'cd /opt/tak/certs && ./makeRootCa.sh --ca-name "$CA"'
 	if [ $? -eq 0 ];
 	then
-		$DOCKER_COMPOSE exec tak bash -c "cd /opt/tak/certs && ./makeCert.sh server $IP"
+		$DOCKER_COMPOSE exec tak bash -c "cd /opt/tak/certs && echo 'y' | ./makeCert.sh ca $intermeditate"
 		if [ $? -eq 0 ];
 		then
-			$DOCKER_COMPOSE exec tak bash -c "cd /opt/tak/certs && ./makeCert.sh client $user"	
+			$DOCKER_COMPOSE exec tak bash -c "cd /opt/tak/certs && ./makeCert.sh server $IP"
 			if [ $? -eq 0 ];
 			then
-				# Set permissions so user can write to certs/files
-				$DOCKER_COMPOSE exec tak bash -c "useradd $USER && chown -R $USER:$USER /opt/tak/certs/"
-				$DOCKER_COMPOSE stop tak
-				break
-			else 
+				$DOCKER_COMPOSE exec tak bash -c "cd /opt/tak/certs && ./makeCert.sh client $user"	
+				if [ $? -eq 0 ];
+				then
+					# Set permissions so user can write to certs/files
+					$DOCKER_COMPOSE exec tak bash -c "useradd $USER && chown -R $USER:$USER /opt/tak/certs/"
+					$DOCKER_COMPOSE stop tak
+					break
+				else 
+					sleep 5
+				fi
+			else
 				sleep 5
 			fi
 		else
 			sleep 5
-		fi
+		fi		
 	fi
 done
-
-printf $info "Creating certificates for 2 users in tak/certs/files for a quick setup via TAK's import function\n"
-
-# Make 2 users
-cd tak/certs
-./makeCert.sh client user1
-./makeCert.sh client user2
-
-
-# Make 2 data packages
-cd ../../
-./scripts/certDP.sh $IP user1
-./scripts/certDP.sh $IP user2
 
 printf $info "Waiting for TAK server to go live. This should take <1m with an AMD64, ~2min on a ARM64 (Pi)\n"
 $DOCKER_COMPOSE start tak
@@ -381,7 +413,6 @@ docker container ls
 printf $warning "\n\nImport the $user.p12 certificate from this folder to your browser as per the README.md file\n"
 printf $success "Login at https://$IP:8443 with your admin account. No need to run the /setup step as this has been done.\n" 
 printf $info "Certificates and *CERT DATA PACKAGES* are in tak/certs/files \n\n" 
-printf $success "Setup script sponsored by CloudRF.com - \"The API for RF\"\n\n"
 printf $danger "---------PASSWORDS----------------\n\n"
 printf $danger "Admin user name: $user\n" # Web interface default user name
 printf $danger "Admin password: $password\n" # Web interface default random password created during setup

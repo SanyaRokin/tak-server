@@ -10,9 +10,10 @@ fi
 
 $DOCKER_COMPOSE down
 docker volume rm --force tak-server_db_data
+rm ./.env
 rm -rf tak
 rm -rf /tmp/takserver
 
 # Comment me out to save yourself rebuilding........
-docker image rm tak-server-db --force
-docker image rm tak-server-tak --force
+docker rmi -f tak-server_db
+docker rmi -f tak-server_tak
